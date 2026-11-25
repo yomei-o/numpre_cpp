@@ -1,0 +1,5 @@
+# 合成画像は tools/gen_synth.py で同じものが作り直せる
+testdata/synth/
+testdata/holdout/
+__pycache__/
+build/
