@@ -3,3 +3,4 @@ testdata/synth/
 testdata/holdout/
 __pycache__/
 build/
+testdata/web/

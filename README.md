@@ -3,13 +3,22 @@
 ナンプレ（数独）が解けないとき、その画面のスクリーンショットを渡すと盤面を読み取って解くアプリ。
 C++ のヘッダオンリー本体を WASM にしてスマホのブラウザで動かす予定。Python 版も同じ手順で持つ。
 
-## 今できること（Python 版）
+**デモ: https://yomei-o.github.io/numpre_cpp/** — iPhone の Safari で開き「スクショを選ぶ」。
+処理は全部ブラウザ内の WASM（Web Worker）で、画像はどこにも送らない。読み違いはマスをタップして直せる。
+
+```
+sh build_wasm.sh                     # docs/numpre.js（wasm 埋め込み 1 ファイル）
+node tools/parity_wasm.js            # Python と WASM の盤・格子が一致するか（build/rgba を先に作る）
+```
+
+## 今できること（Python 版 = C++ 版 cpp/numpre.h）
 
 ```
 python python/numpre.py testdata/app_tiles_1519.png
 ```
 
-1. **盤の位置**：色の段差（縁）の 0/1 マップを作り、刻み p の 10×10 本の格子線が縁に乗る割合を総当たり
+1. **盤の位置**：色の段差（縁）の 0/1 マップを作り、横刻み px・縦刻み py（縦横比 0.7〜1.4。websudoku のスマホ表示は
+   マスが横長）の 10×10 本の格子線が縁に乗る割合を総当たり
    （縮小画像で粗く → 原寸で詰める → 10 本の線を 1 本ずつ合わせ直す）。
 2. **数字**：マス中央を切り出し大津の二値化、少ない側を字とする。盤全体の字の高さの中央値の 55% 未満は
    メモ書きとして捨てる。外接矩形を 20×20 に正規化し、Windows の 22 フォントで描いた型と照合
@@ -35,3 +44,10 @@ python tools/gen_synth.py 100                               # testdata/synth
 SYNTH_DIR=holdout SYNTH_SEED=2026 python tools/gen_synth.py 100
 SYNTH_DIR=holdout python tools/eval.py
 ```
+
+## web のナンプレサイトで実験（2026-11-25）
+
+`tools/capture_web.py` で Playwright で撮影（同意バナーは押す／貼り付き要素は隠す。sudoku.com は案内の吹き出しが
+消えないので外した）。画像は `testdata/web/`（他所のサイトなのでリポに入れない）。
+websudoku（易・最難）× スマホ/PC、sudoku.game × 2、sudokuonline.io × 2、puzzle-sudoku PC、sudokukingdom PC の
+10 枚すべて「解が 1 つ」。Python と WASM は 11 枚で盤・格子とも完全一致、WASM は 1 枚 2〜4.5 秒。

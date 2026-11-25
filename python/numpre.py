@@ -44,78 +44,88 @@ def dilate_x(e, r):
 def dilate_y(e, r):
     return dilate_x(e.T, r).T
 
-def lattice_scores(CV, CH, p, xs, ys):
-    """左上 (x0,y0) の候補すべて（xs×ys）について、刻み p の 10 本×2 の線が縁に乗る割合。
+ASPECTS = [0.70 + 0.05 * i for i in range(15)]   # 縦の刻み / 横の刻み（0.70〜1.40）
+
+def lattice_scores(CV, CH, px, py, xs, ys):
+    """左上 (x0,y0) の候補すべて（xs×ys）について、横刻み px・縦刻み py の 10 本×2 の線が縁に乗る割合。
     CV[y+1,x] = 列 x の縦の縁の y までの累積、CH[y,x+1] = 行 y の横の縁の累積。
     戻り値: 格子線の平均被覆 − 0.5×中間線（半マスずれ）の平均被覆。"""
-    L = int(round(9 * p))
+    LX, LY = int(round(9 * px)), int(round(9 * py))
     X0, Y0 = np.meshgrid(xs, ys)          # 形 (len(ys), len(xs))
     on = np.zeros(X0.shape, np.float64)
     mid = np.zeros(X0.shape, np.float64)
     for k in range(19):
-        off = int(round(k * p / 2))
+        ox, oy = int(round(k * px / 2)), int(round(k * py / 2))
         acc = on if k % 2 == 0 else mid
-        # 縦線: x = x0+off, y = y0..y0+L
-        acc += (CV[Y0 + L, X0 + off] - CV[Y0, X0 + off]) / L
-        # 横線: y = y0+off, x = x0..x0+L
-        acc += (CH[Y0 + off, X0 + L] - CH[Y0 + off, X0]) / L
+        # 縦線: x = x0+ox, y = y0..y0+LY
+        acc += (CV[Y0 + LY, X0 + ox] - CV[Y0, X0 + ox]) / LY
+        # 横線: y = y0+oy, x = x0..x0+LX
+        acc += (CH[Y0 + oy, X0 + LX] - CH[Y0 + oy, X0]) / LX
     return on / 20.0 - 0.5 * mid / 18.0
 
-def search(ev, eh, r, pmin, pmax, pstep, xr, yr):
-    """縁マップ上で格子を総当たり。xr, yr は x0, y0 の範囲 (lo, hi) 含む。"""
+def search(ev, eh, r, pairs, xr, yr):
+    """縁マップ上で格子を総当たり。pairs は (px, py) の候補、xr, yr は x0, y0 の範囲 (lo, hi) 含む。"""
     H, W = ev.shape
     V = dilate_x(ev, r).astype(np.int32)
     Hh = dilate_y(eh, r).astype(np.int32)
     CV = np.zeros((H + 1, W), np.int32); CV[1:] = np.cumsum(V, axis=0)
     CH = np.zeros((H, W + 1), np.int32); CH[:, 1:] = np.cumsum(Hh, axis=1)
-    best = (-1e9, 0, 0, 0)
-    p = pmin
-    while p <= pmax + 1e-9:
-        L = int(round(9 * p))
-        x_lo, x_hi = max(0, xr[0]), min(W - 1 - L, xr[1])
-        y_lo, y_hi = max(0, yr[0]), min(H - 1 - L, yr[1])
-        if x_hi >= x_lo and y_hi >= y_lo:
-            xs = np.arange(x_lo, x_hi + 1)
-            ys = np.arange(y_lo, y_hi + 1)
-            s = lattice_scores(CV, CH, p, xs, ys)
-            i = int(np.argmax(s))       # 行優先で最初の最大（C++ も同じ順）
-            iy, ix = divmod(i, s.shape[1])
-            if s[iy, ix] > best[0] + 1e-12:
-                best = (float(s[iy, ix]), p, int(xs[ix]), int(ys[iy]))
-        p += pstep
+    best = (-1e9, 0.0, 0.0, 0, 0)
+    for px, py in pairs:
+        LX, LY = int(round(9 * px)), int(round(9 * py))
+        x_lo, x_hi = max(0, xr[0]), min(W - 1 - LX, xr[1])
+        y_lo, y_hi = max(0, yr[0]), min(H - 1 - LY, yr[1])
+        if x_hi < x_lo or y_hi < y_lo:
+            continue
+        xs = np.arange(x_lo, x_hi + 1)
+        ys = np.arange(y_lo, y_hi + 1)
+        s = lattice_scores(CV, CH, px, py, xs, ys)
+        i = int(np.argmax(s))       # 行優先で最初の最大（C++ も同じ順）
+        iy, ix = divmod(i, s.shape[1])
+        if s[iy, ix] > best[0] + 1e-12:
+            best = (float(s[iy, ix]), px, py, int(xs[ix]), int(ys[iy]))
     return best
 
+def frange(lo, hi, step):
+    out, v = [], lo
+    while v <= hi + 1e-9:
+        out.append(v); v += step
+    return out
+
 def find_grid(rgb):
-    """盤の左上 (x0, y0) と 1 マスの大きさ p（画素）を返す。"""
+    """盤の左上 (x0, y0) と 1 マスの横・縦の大きさ px, py（画素）、10 本ずつの線の位置 xs, ys を返す。"""
     H, W, _ = rgb.shape
     ev, eh = edge_maps(rgb)
     k = max(1, -(-max(H, W) // SMALL))
     sv, sh = pool_max(ev, k), pool_max(eh, k)
     h, w = sv.shape
     m = min(h, w)
-    score, p, x0, y0 = search(sv, sh, 1, m / 20.0, m / 9.0, 0.25, (0, w), (0, h))
+    pairs = [(p, p * a) for p in frange(m / 30.0, m / 9.0, 0.25) for a in ASPECTS]
+    score, px, py, x0, y0 = search(sv, sh, 1, pairs, (0, w), (0, h))
     # 原寸で詰める
-    P = p * k
-    r = max(1, int(round(P * 0.05)))
-    score2, P2, X0, Y0 = search(ev, eh, r, P - k, P + k, 0.25,
-                                (x0 * k - 2 * k, x0 * k + 2 * k), (y0 * k - 2 * k, y0 * k + 2 * k))
-    xs = refine_lines(ev, X0, Y0, P2)
-    ys = refine_lines(eh.T, Y0, X0, P2)
-    return {"x0": X0, "y0": Y0, "p": P2, "score": score2, "coarse_score": score,
-            "xs": xs, "ys": ys}
+    PX, PY = px * k, py * k
+    r = max(1, int(round(min(PX, PY) * 0.05)))
+    st = max(0.25, k / 8.0)
+    pairs = [(a, b) for a in frange(PX - k, PX + k, st) for b in frange(PY - k, PY + k, st)]
+    score2, PX2, PY2, X0, Y0 = search(ev, eh, r, pairs,
+                                      (x0 * k - 2 * k, x0 * k + 2 * k), (y0 * k - 2 * k, y0 * k + 2 * k))
+    xs = refine_lines(ev, X0, Y0, PX2, PY2)
+    ys = refine_lines(eh.T, Y0, X0, PY2, PX2)
+    return {"x0": X0, "y0": Y0, "px": PX2, "py": PY2, "p": min(PX2, PY2),
+            "score": score2, "coarse_score": score, "xs": xs, "ys": ys}
 
-def refine_lines(ev, x0, y0, p):
+def refine_lines(ev, x0, y0, px, py):
     """10 本の縦線を 1 本ずつ合わせ直す（横線は転置して同じ関数）。
-    線の近く ±0.2p の各列で縦の縁の被覆を数え、最大の半分以上ある列の最初と最後の真ん中に置く。
+    線の近く ±0.2px の各列で縦の縁の被覆を数え、最大の半分以上ある列の最初と最後の真ん中に置く。
     タイル型なら隙間の両側の縁の真ん中、線なら線の太さの真ん中になる。"""
     H, W = ev.shape
-    L = int(round(9 * p))
+    L = int(round(9 * py))
     ya, yb = max(0, y0), min(H, y0 + L)
     out = []
     for k in range(10):
-        xk = x0 + k * p
-        a = max(0, int(np.floor(xk - 0.2 * p)))
-        b = min(W - 1, int(np.ceil(xk + 0.2 * p)))
+        xk = x0 + k * px
+        a = max(0, int(np.floor(xk - 0.2 * px)))
+        b = min(W - 1, int(np.ceil(xk + 0.2 * px)))
         cov = ev[ya:yb, a:b + 1].sum(axis=0).astype(np.int64)
         mx = int(cov.max()) if cov.size else 0
         if mx * 5 < (yb - ya):           # 被覆 20% 未満なら動かさない
